@@ -1,0 +1,15 @@
+# Byte-compiled
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Mac
+.DS_Store
+.AppleDouble
+
+# Cache files (never commit user data)
+.piread/
+*.json.bak
+
+# Secrets
+*.plist.local

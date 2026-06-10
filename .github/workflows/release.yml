@@ -1,0 +1,44 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Extract version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+
+      - name: Stamp version into _meta.lua
+        run: |
+          sed -i "s/version     = \"[^\"]*\"/version     = \"${{ steps.version.outputs.VERSION }}\"/" \
+            piread.koplugin/_meta.lua
+
+      - name: Build plugin zip
+        run: |
+          zip -r piread.koplugin.zip piread.koplugin \
+            -x "*.git*" "*/.*" "*/__pycache__/*" "*.pyc"
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: piread.koplugin.zip
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-beta') || contains(github.ref_name, '-rc') }}
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

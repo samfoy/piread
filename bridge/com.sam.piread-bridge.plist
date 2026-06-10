@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.sam.piread-bridge</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/opt/homebrew/bin/python3</string>
+        <string>/Users/sam.painter/Projects/piread-bridge/server.py</string>
+    </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PIREAD_AWS_PROFILE</key>
+        <string>openclaw-bedrock</string>
+        <key>PIREAD_AWS_REGION</key>
+        <string>us-west-2</string>
+        <key>PIREAD_MODEL_ID</key>
+        <string>us.anthropic.claude-sonnet-4-6</string>
+        <key>PIREAD_PORT</key>
+        <string>7731</string>
+        <!-- Set PIREAD_TOKEN here if you want a shared secret -->
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- Restart automatically if it crashes -->
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/sam.painter/Library/Logs/piread-bridge.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/sam.painter/Library/Logs/piread-bridge.log</string>
+
+    <!-- Throttle rapid restart loops -->
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+</dict>
+</plist>
