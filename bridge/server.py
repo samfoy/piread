@@ -145,7 +145,10 @@ def _run_xray_job(job_id: str, title: str, author: str, reading_pct: float) -> N
         update("finding", progress="Looking up book in Calibre")
         book_meta = find_epub(title, author)
         if not book_meta:
-            update("failed", error=f"Book not found in library: {title}")
+            # Fallback: generate from Claude's knowledge (no EPUB needed)
+            logging.info("Book not in Calibre, using knowledge-only mode: %s", title)
+            update("generating", progress=f"Generating X-Ray from knowledge (no EPUB): {title}")
+            _run_knowledge_xray_job(job_id, title, author)
             return
 
         update("extracting", progress="Extracting EPUB text")
@@ -171,6 +174,118 @@ def _run_xray_job(job_id: str, title: str, author: str, reading_pct: float) -> N
 
     except Exception as exc:
         logging.exception("X-Ray job %s failed", job_id)
+        update("failed", error=str(exc))
+
+
+def _run_knowledge_xray_job(job_id: str, title: str, author: str) -> None:
+    """
+    Background thread: generate X-Ray from Claude's training knowledge alone.
+    Used when the EPUB is not in Calibre (e.g. audiobook listeners).
+    """
+    def update(status: str, **kw):
+        with _jobs_lock:
+            _xray_jobs[job_id].update({"status": status, **kw})
+
+    try:
+        update("generating", progress=f"Generating X-Ray from knowledge: {title}")
+
+        # Build a knowledge-only prompt
+        system = (
+            "You are a literary analyst. Generate a structured X-Ray for the book "
+            "from your training knowledge. Return ONLY valid JSON. "
+            "Your entire response must be one JSON object starting with '{' and ending with '}'."
+        )
+        prompt = f"""Generate a complete X-Ray for \"{title}\" by {author} from your knowledge of the book.
+
+Return JSON matching exactly this structure:
+{{
+  \"book_type\": \"fiction\",
+  \"characters\": [
+    {{\"name\": str, \"role\": str, \"description\": str, \"aliases\": [str], \"first_appearance_pct\": 0}}
+  ],
+  \"locations\": [{{\"name\": str, \"description\": str, \"importance\": str}}],
+  \"terms\": [{{\"name\": str, \"definition\": str, \"aliases\": [str]}}],
+  \"historical_figures\": [{{\"name\": str, \"biography\": str, \"context_in_book\": str}}],
+  \"references\": [
+    {{\"name\": str, \"type\": \"literary|historical|mythological|cultural\", \"description\": str, \"context_in_book\": str, \"first_appearance_pct\": 0}}
+  ],
+  \"timeline\": [{{\"chapter\": str, \"event\": str, \"position_pct\": 0}}],
+  \"author_info\": {{\"name\": str, \"bio\": str, \"born\": str, \"died\": null}}
+}}
+
+Generate 15-25 characters, 10-15 locations, 15-25 terms, 10-20 references, 25-40 timeline events.
+For position_pct use your best estimate of where in the book each entity/event appears (0-100).
+"""
+
+        import json as _json
+        import boto3
+        from botocore.config import Config as _BotocoreConfig
+        _cfg = _BotocoreConfig(read_timeout=600, connect_timeout=30)
+        session = boto3.Session(profile_name=PROFILE, region_name=REGION)
+        client = session.client("bedrock-runtime", config=_cfg)
+        body = {
+            "anthropic_version": "bedrock-2023-05-31",
+            "max_tokens": 16000,  # knowledge-only needs more room
+            "system": system,
+            "messages": [{"role": "user", "content": prompt}],
+        }
+        resp = client.invoke_model(
+            modelId=MODEL_ID,
+            body=_json.dumps(body),
+            contentType="application/json",
+            accept="application/json",
+        )
+        raw = _json.loads(resp["body"].read())["content"][0]["text"].strip()
+
+        # Parse JSON (with repair fallback)
+        try:
+            data = _json.loads(raw)
+        except _json.JSONDecodeError:
+            start = raw.find("{")
+            if start >= 0:
+                raw = raw[start:]
+            # Balance braces
+            depth, in_str, esc = 0, False, False
+            end = -1
+            for i, c in enumerate(raw):
+                if esc: esc = False; continue
+                if c == "\\" and in_str: esc = True; continue
+                if c == '"': in_str = not in_str; continue
+                if not in_str:
+                    if c == "{": depth += 1
+                    elif c == "}":
+                        depth -= 1
+                        if depth == 0: end = i; break
+            data = _json.loads(raw[:end+1] if end >= 0 else raw)
+
+        from xray_generator import build_record
+        from xray_cache import save
+        import hashlib
+        from epub_extract import EpubContent
+        from datetime import datetime, timezone
+
+        # Build a minimal EpubContent stand-in
+        book_hash = hashlib.md5(f"{title}|{author}|knowledge".encode()).hexdigest()
+        record = {
+            "version": 1,
+            "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "strategy": "knowledge_only",
+            "book": {
+                "title": title, "author": author,
+                "series": None, "series_index": None,
+                "calibre_id": None, "epub_path": None,
+                "epub_hash": book_hash,
+                "total_chars": 0, "chapter_count": 0,
+            },
+            "xray": data,
+            "mentions": {},
+        }
+        save(book_hash, record)
+        update("ready", record=record, error=None)
+        logging.info("Knowledge X-Ray complete: %s", title)
+
+    except Exception as exc:
+        logging.exception("Knowledge X-Ray job %s failed", job_id)
         update("failed", error=str(exc))
 
 
